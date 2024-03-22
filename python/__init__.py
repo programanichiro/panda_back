@@ -304,6 +304,10 @@ class Panda:
     for bus in range(PANDA_BUS_CNT):
       self.set_can_speed_kbps(bus, self._can_speed_kbps)
 
+  @property
+  def spi(self) -> bool:
+    return isinstance(self._handle, PandaSpiHandle)
+
   @classmethod
   def spi_connect(cls, serial, ignore_version=False):
     # get UID to confirm slave is present and up
@@ -433,6 +437,8 @@ class Panda:
           self._handle.controlWrite(Panda.REQUEST_IN, 0xd8, 0, 0, b'', timeout=timeout, expect_disconnect=True)
     except Exception:
       pass
+
+    self.close()
     if not enter_bootloader and reconnect:
       self.reconnect()
 
