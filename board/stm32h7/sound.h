@@ -1,15 +1,9 @@
-
 #define SOUND_RX_BUF_SIZE 2000U
 #define SOUND_TX_BUF_SIZE (SOUND_RX_BUF_SIZE/2U)
 
 __attribute__((section(".sram4"))) static uint16_t sound_rx_buf[2][SOUND_RX_BUF_SIZE];
 
-typedef enum {
-  OFF = 0,
-  IDLE = 1,
-  PLAYING = 2,
-} SoundStatus;
-static SoundStatus sound_status = OFF;
+static uint8_t sound_idle_count;
 
 // Playback processing
 static void BDMA_Channel0_IRQ_Handler(void) {
@@ -24,10 +18,10 @@ static void BDMA_Channel0_IRQ_Handler(void) {
     tx_buf[i/2U] = ((sound_rx_buf[buf_idx][i] + (1UL << 14)) >> 3);
   }
 
-  if (sound_status == OFF) {
+  if (sound_idle_count == 0U) {
     current_board->set_amp_enabled(true);
   }
-  sound_status = PLAYING;
+  sound_idle_count = 2U;
 
   DMA1->LIFCR |= 0xF40;
   DMA1_Stream1->CR &= ~DMA_SxCR_EN;
@@ -37,16 +31,11 @@ static void BDMA_Channel0_IRQ_Handler(void) {
 }
 
 void sound_tick(void) {
-  switch (sound_status) {
-    case IDLE:
+  if (sound_idle_count > 0U) {
+    sound_idle_count--;
+    if (sound_idle_count == 0U) {
       current_board->set_amp_enabled(false);
-      sound_status = OFF;
-      break;
-    case PLAYING:
-      sound_status = IDLE;
-      break;
-    default:
-      break;
+    }
   }
 }
 
@@ -55,7 +44,7 @@ void sound_init(void) {
 
   // Init DAC
   register_set(&DAC1->MCR, 0U, 0xFFFFFFFFU);
-  register_set(&DAC1->CR, DAC_CR_TEN1 | (6U << DAC_CR_TSEL1_Pos) | DAC_CR_DMAEN1, 0xFFFFFFFFU);
+  register_set(&DAC1->CR, DAC_CR_TEN1 | (4U << DAC_CR_TSEL1_Pos) | DAC_CR_DMAEN1, 0xFFFFFFFFU);
   register_set_bits(&DAC1->CR, DAC_CR_EN1);
 
   // Setup DMAMUX (DAC_CH1_DMA as input)
@@ -66,13 +55,14 @@ void sound_init(void) {
   register_set(&DMA1_Stream1->FCR, 0U, 0x00000083U);
   DMA1_Stream1->CR = (0b11UL << DMA_SxCR_PL_Pos) | (0b01UL << DMA_SxCR_MSIZE_Pos) | (0b01UL << DMA_SxCR_PSIZE_Pos) | DMA_SxCR_MINC | (1U << DMA_SxCR_DIR_Pos);
 
-  // Init trigger timer (48kHz)
-  register_set(&TIM7->PSC, 0U, 0xFFFFU);
-  register_set(&TIM7->ARR, 2494U, 0xFFFFU);
-  register_set(&TIM7->CR2, (0b10U << TIM_CR2_MMS_Pos), TIM_CR2_MMS_Msk);
-  register_set(&TIM7->CR1, TIM_CR1_ARPE | TIM_CR1_URS, 0x088EU);
-  TIM7->SR = 0U;
-  TIM7->CR1 |= TIM_CR1_CEN;
+  // Init trigger timer (little slower than 48kHz, pulled in sync by SAI4_FS_B)
+  register_set(&TIM5->PSC, 2600U, 0xFFFFU);
+  register_set(&TIM5->ARR, 100U, 0xFFFFFFFFU); // not important
+  register_set(&TIM5->AF1, (0b0010UL << TIM5_AF1_ETRSEL_Pos), TIM5_AF1_ETRSEL_Msk);
+  register_set(&TIM5->CR2, (0b010U << TIM_CR2_MMS_Pos), TIM_CR2_MMS_Msk);
+  register_set(&TIM5->SMCR, TIM_SMCR_ECE | (0b00111UL << TIM_SMCR_TS_Pos)| (0b0100UL << TIM_SMCR_SMS_Pos), 0x31FFF7U);
+  TIM5->CNT = 0U; TIM5->SR = 0U;
+  TIM5->CR1 |= TIM_CR1_CEN;
 
   // stereo audio in
   register_set(&SAI4_Block_B->CR1, SAI_xCR1_DMAEN | (0b00UL << SAI_xCR1_SYNCEN_Pos) | (0b100U << SAI_xCR1_DS_Pos) | (0b11U << SAI_xCR1_MODE_Pos), 0x0FFB3FEFU);
